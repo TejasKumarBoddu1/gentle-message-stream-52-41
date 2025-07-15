@@ -1,7 +1,6 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { EmotionState } from '@/utils/mediapipe/emotionDetection';
-import { initializeFaceDetection } from '@/utils/mediapipe/faceDetection';
 import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 
 export interface EmotionDetectionResult extends EmotionState {
@@ -28,7 +27,7 @@ export const useEmotionDetection = (videoRef: React.RefObject<HTMLVideoElement>,
   const [isInitialized, setIsInitialized] = useState(false);
   const faceLandmarkerRef = useRef<FaceLandmarker | null>(null);
   const animationFrameRef = useRef<number>();
-  const lastVideoTimeRef = useRef(-1);
+  const lastProcessTimeRef = useRef<number>(0);
 
   // Initialize MediaPipe Face Landmarker
   useEffect(() => {
@@ -38,7 +37,7 @@ export const useEmotionDetection = (videoRef: React.RefObject<HTMLVideoElement>,
       if (!isActive || isInitialized) return;
 
       try {
-        console.log('Initializing MediaPipe Face Landmarker...');
+        console.log('🎭 Initializing MediaPipe Face Landmarker...');
         
         const vision = await FilesetResolver.forVisionTasks(
           'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm'
@@ -60,11 +59,10 @@ export const useEmotionDetection = (videoRef: React.RefObject<HTMLVideoElement>,
         if (isMounted) {
           faceLandmarkerRef.current = faceLandmarker;
           setIsInitialized(true);
-          console.log('MediaPipe Face Landmarker initialized successfully');
+          console.log('✅ MediaPipe Face Landmarker initialized successfully');
         }
       } catch (error) {
-        console.error('Failed to initialize MediaPipe Face Landmarker:', error);
-        // Fallback to basic emotion state
+        console.error('❌ Failed to initialize MediaPipe Face Landmarker:', error);
         if (isMounted) {
           setEmotionState({
             dominant: 'neutral',
@@ -93,7 +91,7 @@ export const useEmotionDetection = (videoRef: React.RefObject<HTMLVideoElement>,
 
   // Real-time emotion detection
   useEffect(() => {
-    if (!isActive || !faceLandmarkerRef.current || !videoRef.current) {
+    if (!isActive || !faceLandmarkerRef.current || !videoRef.current || !isInitialized) {
       return;
     }
 
@@ -106,53 +104,58 @@ export const useEmotionDetection = (videoRef: React.RefObject<HTMLVideoElement>,
         return;
       }
 
-      const currentTime = video.currentTime;
+      const now = performance.now();
       
-      // Only process if video time has changed (new frame)
-      if (currentTime !== lastVideoTimeRef.current) {
-        lastVideoTimeRef.current = currentTime;
+      // Throttle processing to ~3 FPS for better performance
+      if (now - lastProcessTimeRef.current < 333) {
+        animationFrameRef.current = requestAnimationFrame(detectEmotions);
+        return;
+      }
+      
+      lastProcessTimeRef.current = now;
 
-        try {
-          // Convert current time to milliseconds for MediaPipe
-          const timestamp = performance.now();
+      try {
+        // Detect faces and blendshapes
+        const results = faceLandmarker.detectForVideo(video, now);
+        
+        if (results.faceBlendshapes && results.faceBlendshapes.length > 0) {
+          // Process the blendshapes to determine emotion
+          const blendshapes = results.faceBlendshapes[0];
+          const newEmotionState = analyzeBlendshapes(blendshapes);
+          setEmotionState(newEmotionState);
           
-          // Detect faces and blendshapes
-          const results = faceLandmarker.detectForVideo(video, timestamp);
-          
-          if (results.faceBlendshapes && results.faceBlendshapes.length > 0) {
-            // Process the blendshapes to determine emotion
-            const blendshapes = results.faceBlendshapes[0];
-            const newEmotionState = analyzeBlendshapes(blendshapes);
-            setEmotionState(newEmotionState);
-          } else {
-            // No face detected
-            setEmotionState({
-              dominant: 'neutral',
-              confidence: 0,
-              scores: {
-                happy: 0,
-                sad: 0,
-                surprised: 0,
-                neutral: 1,
-                disgust: 0,
-                angry: 0,
-                fearful: 0
-              },
-              icon: '😐'
-            });
-          }
-        } catch (error) {
-          console.error('Error during emotion detection:', error);
+          console.log('🎭 Emotion detected:', newEmotionState.dominant, 'Confidence:', (newEmotionState.confidence * 100).toFixed(1) + '%');
+        } else {
+          // No face detected - set neutral state
+          setEmotionState({
+            dominant: 'neutral',
+            confidence: 0.1,
+            scores: {
+              happy: 0,
+              sad: 0,
+              surprised: 0,
+              neutral: 1,
+              disgust: 0,
+              angry: 0,
+              fearful: 0
+            },
+            icon: '😐'
+          });
+          console.log('👤 No face detected');
         }
+      } catch (error) {
+        console.error('❌ Error during emotion detection:', error);
       }
 
       animationFrameRef.current = requestAnimationFrame(detectEmotions);
     };
 
+    console.log('🎬 Starting emotion detection loop');
     detectEmotions();
 
     return () => {
       if (animationFrameRef.current) {
+        console.log('⏹️ Stopping emotion detection loop');
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
@@ -179,7 +182,7 @@ export const useEmotionDetection = (videoRef: React.RefObject<HTMLVideoElement>,
   };
 };
 
-// Analyze MediaPipe blendshapes to determine emotion
+// Analyze MediaPipe blendshapes to determine emotion with improved detection
 const analyzeBlendshapes = (blendshapes: any): EmotionState => {
   const categories = blendshapes.categories || [];
   
@@ -189,74 +192,61 @@ const analyzeBlendshapes = (blendshapes: any): EmotionState => {
     return category ? Math.max(0, Math.min(1, category.score)) : 0;
   };
 
-  // Map blendshapes to emotions with improved weights
+  // Enhanced emotion mapping with better weights and combinations
   const scores = {
     happy: Math.max(
-      getScore('mouthSmileLeft') * 0.4,
-      getScore('mouthSmileRight') * 0.4,
-      getScore('cheekSquintLeft') * 0.3,
-      getScore('cheekSquintRight') * 0.3,
-      getScore('mouthUpperUpLeft') * 0.2,
-      getScore('mouthUpperUpRight') * 0.2
-    ),
+      getScore('mouthSmileLeft') * 0.6 + getScore('mouthSmileRight') * 0.6,
+      getScore('cheekSquintLeft') * 0.4 + getScore('cheekSquintRight') * 0.4,
+      getScore('mouthDimpleLeft') * 0.3 + getScore('mouthDimpleRight') * 0.3
+    ) / 2,
     
     sad: Math.max(
-      getScore('mouthFrownLeft') * 0.5,
-      getScore('mouthFrownRight') * 0.5,
-      getScore('mouthLowerDownLeft') * 0.3,
-      getScore('mouthLowerDownRight') * 0.3,
-      getScore('browDownLeft') * 0.2,
-      getScore('browDownRight') * 0.2
-    ),
+      getScore('mouthFrownLeft') * 0.7 + getScore('mouthFrownRight') * 0.7,
+      getScore('mouthLowerDownLeft') * 0.5 + getScore('mouthLowerDownRight') * 0.5,
+      getScore('browDownLeft') * 0.4 + getScore('browDownRight') * 0.4
+    ) / 2,
     
     surprised: Math.max(
-      getScore('eyeWideLeft') * 0.4,
-      getScore('eyeWideRight') * 0.4,
-      getScore('jawOpen') * 0.4,
-      getScore('mouthFunnel') * 0.3,
-      getScore('browOuterUpLeft') * 0.2,
-      getScore('browOuterUpRight') * 0.2
-    ),
+      getScore('eyeWideLeft') * 0.6 + getScore('eyeWideRight') * 0.6,
+      getScore('jawOpen') * 0.7,
+      getScore('browOuterUpLeft') * 0.3 + getScore('browOuterUpRight') * 0.3
+    ) / 2,
     
     angry: Math.max(
-      getScore('browDownLeft') * 0.4,
-      getScore('browDownRight') * 0.4,
-      getScore('eyeSquintLeft') * 0.3,
-      getScore('eyeSquintRight') * 0.3,
-      getScore('mouthPressLeft') * 0.3,
-      getScore('mouthPressRight') * 0.3
-    ),
+      getScore('browDownLeft') * 0.6 + getScore('browDownRight') * 0.6,
+      getScore('eyeSquintLeft') * 0.4 + getScore('eyeSquintRight') * 0.4,
+      getScore('mouthPressLeft') * 0.5 + getScore('mouthPressRight') * 0.5
+    ) / 2,
     
     disgust: Math.max(
-      getScore('noseSneerLeft') * 0.5,
-      getScore('noseSneerRight') * 0.5,
-      getScore('mouthUpperUpLeft') * 0.3,
-      getScore('mouthUpperUpRight') * 0.3,
-      getScore('cheekSquintLeft') * 0.2,
-      getScore('cheekSquintRight') * 0.2
-    ),
+      getScore('noseSneerLeft') * 0.8 + getScore('noseSneerRight') * 0.8,
+      getScore('mouthUpperUpLeft') * 0.4 + getScore('mouthUpperUpRight') * 0.4
+    ) / 2,
     
     fearful: Math.max(
-      getScore('eyeWideLeft') * 0.3,
-      getScore('eyeWideRight') * 0.3,
-      getScore('browInnerUp') * 0.4,
-      getScore('mouthStretchLeft') * 0.3,
-      getScore('mouthStretchRight') * 0.3
-    ),
+      getScore('eyeWideLeft') * 0.4 + getScore('eyeWideRight') * 0.4,
+      getScore('browInnerUp') * 0.6,
+      getScore('mouthStretchLeft') * 0.3 + getScore('mouthStretchRight') * 0.3
+    ) / 2,
     
-    neutral: 1 - Math.max(
-      getScore('mouthSmileLeft'),
-      getScore('mouthSmileRight'),
-      getScore('mouthFrownLeft'),
-      getScore('mouthFrownRight'),
-      getScore('eyeWideLeft'),
-      getScore('eyeWideRight'),
-      getScore('browDownLeft'),
-      getScore('browDownRight')
-    )
+    neutral: Math.max(0.1, 1 - Math.max(
+      getScore('mouthSmileLeft') + getScore('mouthSmileRight'),
+      getScore('mouthFrownLeft') + getScore('mouthFrownRight'),
+      getScore('eyeWideLeft') + getScore('eyeWideRight'),
+      getScore('browDownLeft') + getScore('browDownRight'),
+      getScore('jawOpen')
+    ))
   };
 
-  // Normalize scores to ensure they sum to 1
+  // Amplify stronger emotions
+  Object.keys(scores).forEach(key => {
+    const score = scores[key as keyof typeof scores];
+    if (score > 0.3) {
+      scores[key as keyof typeof scores] = Math.min(1, score * 1.5);
+    }
+  });
+
+  // Normalize scores
   const totalScore = Object.values(scores).reduce((sum, score) => sum + score, 0);
   if (totalScore > 0) {
     Object.keys(scores).forEach(key => {
@@ -283,7 +273,7 @@ const analyzeBlendshapes = (blendshapes: any): EmotionState => {
 
   return {
     dominant: dominantEmotion,
-    confidence: Math.min(confidence * 2, 1), // Amplify confidence for better UX
+    confidence: Math.min(confidence * 3, 1), // Amplify confidence for better detection
     scores,
     icon: emotionIcons[dominantEmotion] || '😐',
     timestamp: Date.now()
