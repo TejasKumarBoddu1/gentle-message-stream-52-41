@@ -4,7 +4,12 @@ import { EmotionState } from '@/utils/mediapipe/emotionDetection';
 import { initializeFaceDetection } from '@/utils/mediapipe/faceDetection';
 import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 
-export const useEmotionDetection = (videoRef: React.RefObject<HTMLVideoElement>, isActive: boolean = false) => {
+export interface EmotionDetectionResult extends EmotionState {
+  isInitialized: boolean;
+  isProcessing: boolean;
+}
+
+export const useEmotionDetection = (videoRef: React.RefObject<HTMLVideoElement>, isActive: boolean = false): EmotionDetectionResult => {
   const [emotionState, setEmotionState] = useState<EmotionState>({
     dominant: 'neutral',
     confidence: 0,
@@ -20,17 +25,17 @@ export const useEmotionDetection = (videoRef: React.RefObject<HTMLVideoElement>,
     icon: '😐'
   });
 
+  const [isInitialized, setIsInitialized] = useState(false);
   const faceLandmarkerRef = useRef<FaceLandmarker | null>(null);
   const animationFrameRef = useRef<number>();
   const lastVideoTimeRef = useRef(-1);
-  const isInitializedRef = useRef(false);
 
   // Initialize MediaPipe Face Landmarker
   useEffect(() => {
     let isMounted = true;
 
     const initializeDetection = async () => {
-      if (!isActive || isInitializedRef.current) return;
+      if (!isActive || isInitialized) return;
 
       try {
         console.log('Initializing MediaPipe Face Landmarker...');
@@ -54,7 +59,7 @@ export const useEmotionDetection = (videoRef: React.RefObject<HTMLVideoElement>,
 
         if (isMounted) {
           faceLandmarkerRef.current = faceLandmarker;
-          isInitializedRef.current = true;
+          setIsInitialized(true);
           console.log('MediaPipe Face Landmarker initialized successfully');
         }
       } catch (error) {
@@ -84,7 +89,7 @@ export const useEmotionDetection = (videoRef: React.RefObject<HTMLVideoElement>,
     return () => {
       isMounted = false;
     };
-  }, [isActive]);
+  }, [isActive, isInitialized]);
 
   // Real-time emotion detection
   useEffect(() => {
@@ -151,7 +156,7 @@ export const useEmotionDetection = (videoRef: React.RefObject<HTMLVideoElement>,
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, [isActive, videoRef]);
+  }, [isActive, videoRef, isInitialized]);
 
   // Cleanup
   useEffect(() => {
@@ -159,7 +164,7 @@ export const useEmotionDetection = (videoRef: React.RefObject<HTMLVideoElement>,
       if (faceLandmarkerRef.current) {
         faceLandmarkerRef.current.close();
         faceLandmarkerRef.current = null;
-        isInitializedRef.current = false;
+        setIsInitialized(false);
       }
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
@@ -167,7 +172,11 @@ export const useEmotionDetection = (videoRef: React.RefObject<HTMLVideoElement>,
     };
   }, []);
 
-  return emotionState;
+  return {
+    ...emotionState,
+    isInitialized,
+    isProcessing: isActive && isInitialized
+  };
 };
 
 // Analyze MediaPipe blendshapes to determine emotion
