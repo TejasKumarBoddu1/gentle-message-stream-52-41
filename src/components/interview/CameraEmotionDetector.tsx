@@ -2,7 +2,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Camera, CameraOff, Loader } from 'lucide-react';
+import { Camera, CameraOff, Loader, AlertTriangle } from 'lucide-react';
 import { useEmotionDetection } from '@/hooks/useEmotionDetection';
 import EmotionDisplay from './EmotionDisplay';
 import { useToast } from '@/hooks/use-toast';
@@ -33,27 +33,44 @@ const CameraEmotionDetector: React.FC<CameraEmotionDetectorProps> = ({ onEmotion
     setError(null);
 
     try {
+      // Request higher resolution for better face detection
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
-          width: { ideal: 640 },
-          height: { ideal: 480 },
-          facingMode: 'user'
+          width: { ideal: 1280, min: 640 },
+          height: { ideal: 720, min: 480 },
+          facingMode: 'user',
+          frameRate: { ideal: 30, min: 15 }
         }
       });
 
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
+        
+        // Wait for video to be ready
+        await new Promise((resolve) => {
+          if (videoRef.current) {
+            videoRef.current.onloadeddata = resolve;
+          }
+        });
+        
         await videoRef.current.play();
         setIsCameraActive(true);
+        
+        console.log('📷 Camera started successfully');
+        console.log('📹 Video dimensions:', {
+          width: videoRef.current.videoWidth,
+          height: videoRef.current.videoHeight
+        });
+        
         toast({
           title: "Camera activated",
-          description: "Real-time emotion detection is now active.",
+          description: "Real-time emotion detection is now active. Try making different facial expressions!",
         });
       }
     } catch (err: any) {
       console.error('Camera access error:', err);
       setError(err.name === 'NotAllowedError' 
-        ? 'Camera access denied. Please allow camera permissions.'
+        ? 'Camera access denied. Please allow camera permissions and refresh the page.'
         : 'Unable to access camera. Please check your camera settings.'
       );
       toast({
@@ -94,21 +111,29 @@ const CameraEmotionDetector: React.FC<CameraEmotionDetectorProps> = ({ onEmotion
         <CardHeader>
           <CardTitle className="flex items-center justify-between">
             <span>Live Camera Feed</span>
-            <Button
-              onClick={toggleCamera}
-              variant={isCameraActive ? "destructive" : "default"}
-              size="sm"
-              disabled={isLoading}
-            >
-              {isLoading ? (
-                <Loader className="h-4 w-4 animate-spin" />
-              ) : isCameraActive ? (
-                <CameraOff className="h-4 w-4" />
-              ) : (
-                <Camera className="h-4 w-4" />
+            <div className="flex items-center gap-2">
+              {emotionState.isInitialized && isCameraActive && (
+                <div className="flex items-center gap-1 text-green-600 text-sm">
+                  <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                  <span>Detecting</span>
+                </div>
               )}
-              {isLoading ? "Starting..." : isCameraActive ? "Stop Camera" : "Start Camera"}
-            </Button>
+              <Button
+                onClick={toggleCamera}
+                variant={isCameraActive ? "destructive" : "default"}
+                size="sm"
+                disabled={isLoading}
+              >
+                {isLoading ? (
+                  <Loader className="h-4 w-4 animate-spin" />
+                ) : isCameraActive ? (
+                  <CameraOff className="h-4 w-4" />
+                ) : (
+                  <Camera className="h-4 w-4" />
+                )}
+                {isLoading ? "Starting..." : isCameraActive ? "Stop Camera" : "Start Camera"}
+              </Button>
+            </div>
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -116,7 +141,7 @@ const CameraEmotionDetector: React.FC<CameraEmotionDetectorProps> = ({ onEmotion
             {error && (
               <div className="absolute inset-0 flex items-center justify-center bg-red-100 text-red-800 p-4 text-center">
                 <div>
-                  <Camera className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                  <AlertTriangle className="h-8 w-8 mx-auto mb-2 opacity-50" />
                   <p className="text-sm">{error}</p>
                   <Button
                     onClick={startCamera}
@@ -151,7 +176,7 @@ const CameraEmotionDetector: React.FC<CameraEmotionDetectorProps> = ({ onEmotion
             />
             
             {/* Real-time emotion overlay */}
-            {isCameraActive && emotionState.confidence > 0 && (
+            {isCameraActive && emotionState.confidence > 0.1 && (
               <div className="absolute top-2 right-2">
                 <div className="bg-black/70 rounded-lg p-2 text-white text-center">
                   <div className="text-2xl mb-1">{emotionState.icon}</div>
@@ -160,12 +185,22 @@ const CameraEmotionDetector: React.FC<CameraEmotionDetectorProps> = ({ onEmotion
                 </div>
               </div>
             )}
+            
+            {/* Initialization status */}
+            {isCameraActive && !emotionState.isInitialized && (
+              <div className="absolute bottom-2 left-2">
+                <div className="bg-blue-600/80 rounded-lg p-2 text-white text-xs flex items-center gap-1">
+                  <Loader className="h-3 w-3 animate-spin" />
+                  <span>Initializing AI...</span>
+                </div>
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
 
       {/* Emotion Analysis Display */}
-      {isCameraActive && (
+      {isCameraActive && emotionState.isInitialized && (
         <EmotionDisplay
           emotion={emotionState.dominant}
           confidence={emotionState.confidence}
@@ -173,6 +208,19 @@ const CameraEmotionDetector: React.FC<CameraEmotionDetectorProps> = ({ onEmotion
           scores={emotionState.scores}
           showDetails={true}
         />
+      )}
+      
+      {/* Debug info for troubleshooting */}
+      {isCameraActive && (
+        <Card className="border-dashed">
+          <CardContent className="p-3">
+            <div className="text-xs text-gray-600 space-y-1">
+              <div>Initialization: {emotionState.isInitialized ? '✅' : '⏳'}</div>
+              <div>Processing: {emotionState.isProcessing ? '✅' : '❌'}</div>
+              <div>Last Update: {emotionState.timestamp ? new Date(emotionState.timestamp).toLocaleTimeString() : 'Never'}</div>
+            </div>
+          </CardContent>
+        </Card>
       )}
     </div>
   );
